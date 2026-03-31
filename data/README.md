@@ -1,6 +1,6 @@
 # Data Description
 
-This project uses the BRFSS 2021 Health Indicators dataset for diabetes prediction.
+This project uses the BRFSS 2021 Health Indicators dataset to support both multiclass diabetes risk prediction and a clinical decision-support application.
 
 ## Dataset Overview
 
