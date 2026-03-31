@@ -1,0 +1,1102 @@
+---
+title: "Thesis Codes"
+author: "Deborah"
+date: "2025-07-29"
+output:
+  word_document: default
+  html_document: default
+---
+
+
+```{r}
+# Core wrangling & visualization
+library(tidyverse)     # data manipulation
+library(ggplot2)       # visualization
+library(patchwork)     # combining multiple plots
+library(tibble)        # tidy data frames
+library(scales)        # axis scaling & formatting (e.g., percent, commas)
+library(knitr)         # for kable() tables
+
+
+# Modeling & evaluation
+library(grid)          # base R graphics system (for layout, spacing, unit functions)
+library(caret)         # modeling, training, cross-validation, confusionMatrix
+library(nnet)          # multinomial logistic regression
+library(ranger)        # random forest implementation
+library(xgboost)       # gradient boosting (XGBoost)
+library(keras)         # deep learning (LSTM)
+library(tabnet)        # TabNet deep learning model for tabular data
+library(torch)         # backend for tabnet & deep learning
+library(corrplot)      # correlation heatmap visualization
+
+# Shiny app (Decision Support System)
+library(shiny)         # Shiny framework
+library(shinyWidgets)  # enhanced Shiny UI widgets
+library(bslib)         # Shiny Bootstrap themes
+library(DT)            # interactive tables for Shiny
+
+
+```
+
+1. Data Loading
+```{r}
+# Load dataset into R environment
+getwd()
+setwd("C:/Users/welcome/Desktop")
+diabetes_data <- read.csv("diabetes_012_health_indicators_BRFSS2021.csv")
+
+# Preview first few rows of the dataset
+head(diabetes_data)
+
+```
+
+2. Data Quality Checks
+```{r}
+# Display the structure of the dataset
+str(diabetes_data)
+```
+
+
+```{r}
+# Display summary statistics (min, max, median, mean, quartiles) for each variable
+summary(diabetes_data)
+
+```
+
+
+```{r}
+# Check for missing values across all variables
+colSums(is.na(diabetes_data))
+```
+
+
+```{r}
+# Count the number of duplicated rows
+sum(duplicated(diabetes_data))
+```
+
+
+```{r}
+# Identify rows that appear more than once
+duplicates_summary <- diabetes_data %>%
+  group_by_all() %>%
+  summarise(count = n()) %>%
+  filter(count > 1)
+
+head(duplicates_summary)
+View(duplicates_summary)
+dup_sample <- diabetes_data[duplicated(diabetes_data) | duplicated(diabetes_data, fromLast = TRUE), ]
+head(dup_sample[, c("BMI", "Age", "HighBP", "HighChol", "GenHlth", "PhysHlth", "Income", "Diabetes_012")], 10)
+
+```
+
+
+```{r}
+# Move the target variable (Diabetes_012) to the last column for convenience
+diabetes_data <- relocate(diabetes_data, Diabetes_012, .after = last_col())
+head(diabetes_data)
+```
+
+3. Exploratory Data Analysis
+```{r}
+# Visualize class distribution of the target variable (check for imbalance)
+
+ggplot(diabetes_data, aes(x = factor(Diabetes_012, labels = c("No","Pre","Yes")))) +
+  geom_bar(fill = "steelblue") +
+  geom_text(
+    stat = "count",
+    aes(label = comma(after_stat(count))),
+    vjust = -0.3, size = 3
+  ) +
+  labs(x = "Diabetes Status", y = "Count") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.08))) +  # a little headroom for labels
+  theme_minimal()
+
+```
+
+
+```{r}
+# Numeric summaries of selected variables grouped by diabetes status
+
+num_cols <- c("BMI","Age","GenHlth","MentHlth","PhysHlth","Income")
+
+desc_table <- diabetes_data %>%
+  select(all_of(num_cols), Diabetes_012) %>%
+  group_by(Diabetes_012) %>%
+  summarize(across(
+    all_of(num_cols),
+    list(
+      mean  = ~ round(mean(.),1),
+      median= ~ median(.),
+      min   = ~ min(.),
+      max   = ~ max(.)
+    ), .names = "{col}_{fn}"
+  )) %>%
+  pivot_longer(-Diabetes_012, names_to = c("Variable","Metric"), names_sep = "_") %>%
+  pivot_wider(names_from = Metric, values_from = value)
+
+print(desc_table)
+
+```
+
+
+```{r}
+# Histogram + density overlay plots for continuous variables
+
+hist_plots <- lapply(num_cols, function(var) {
+  ggplot(diabetes_data, aes_string(x = var)) +
+    geom_histogram(bins = 30, alpha = .6) +
+    geom_density(aes(y = ..count..), color = "red", size = .5) +
+    ggtitle(var) +
+    theme_minimal()
+})
+wrap_plots(hist_plots, ncol = 3)
+```
+
+
+```{r}
+# Boxplots of continuous variables stratified by diabetes status
+
+continuous_cols <- c("BMI", "MentHlth", "PhysHlth")
+
+# Build boxplots for those
+box_plots <- lapply(continuous_cols, function(var) {
+  ggplot(diabetes_data,
+         aes_string(x = "factor(Diabetes_012)",
+                    y = var,
+                    fill = "factor(Diabetes_012)")) +
+    geom_boxplot(alpha = .7) +
+    labs(x = "Diabetes Status", y = var) +
+    theme_minimal() +
+    theme(legend.position = "none")
+})
+
+# 3. Combine into a grid (3 panels in one row)
+wrap_plots(box_plots, ncol = 3)
+```
+
+
+```{r}
+# Proportional stacked bar charts for clinical risk factors by diabetes status
+
+clinical_vars <- c("HighBP", "HighChol", "Stroke", "HeartDiseaseorAttack")
+
+diabetes_data %>%
+  select(all_of(clinical_vars), Diabetes_012) %>%
+  pivot_longer(all_of(clinical_vars), 
+               names_to = "feature", 
+               values_to = "value") %>%
+  ggplot(aes(x = factor(value), fill = factor(Diabetes_012))) +
+    geom_bar(position = "fill", width = 0.6) +
+    scale_y_continuous(labels = scales::percent_format()) +
+    facet_wrap(
+      ~ feature,
+      ncol = 2,
+      scales = "free_x",
+      strip.position = "bottom"   # only here
+    ) +
+    labs(
+      x    = "0 = No, 1 = Yes",
+      y    = "% within Diabetes Status",
+      fill = "Diabetes Status"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      strip.text.x     = element_text(face = "bold", size = 14),
+      strip.background = element_blank(),
+      axis.text.x      = element_text(size = 12),
+      axis.text.y      = element_text(size = 12),
+      legend.position  = "bottom"
+    )
+```
+
+
+```{r}
+# Proportional stacked bar charts for lifestyle behaviours by diabetes status
+
+lifestyle_vars <- c("Smoker", "PhysActivity", "Fruits", "Veggies", "HvyAlcoholConsump")
+
+diabetes_data %>%
+  select(all_of(lifestyle_vars), Diabetes_012) %>%
+  pivot_longer(all_of(lifestyle_vars), names_to = "feature", values_to = "value") %>%
+  ggplot(aes(x = factor(value), fill = factor(Diabetes_012))) +
+    geom_bar(position = "fill", width = 0.6) +
+    scale_y_continuous(labels = scales::percent_format()) +
+    facet_wrap(
+      ~ feature,
+      ncol = 3,
+      scales = "free_x",
+      strip.position = "bottom"
+    ) +
+    labs(
+      x    = "0 = No, 1 = Yes",
+      y    = "% within Diabetes Status",
+      fill = "Diabetes Status"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      strip.text.x     = element_text(face = "bold", size = 14),
+      strip.background = element_blank(),
+      axis.text.x      = element_text(size = 12),
+      axis.text.y      = element_text(size = 12),
+      legend.position  = "bottom"
+    )
+
+```
+
+
+```{r}
+# Proportional stacked bar charts for healthcare access & functional status variables
+
+access_vars <- c("AnyHealthcare", "NoDocbcCost", "DiffWalk", "Sex")
+
+diabetes_data %>%
+  select(all_of(access_vars), Diabetes_012) %>%
+  pivot_longer(all_of(access_vars), names_to = "feature", values_to = "value") %>%
+  ggplot(aes(x = factor(value), fill = factor(Diabetes_012))) +
+    geom_bar(position = "fill", width = 0.6) +
+    scale_y_continuous(labels = scales::percent_format()) +
+    facet_wrap(
+      ~ feature,
+      ncol = 2,                # two columns → two rows
+      scales = "free_x",
+      strip.position = "bottom"
+    ) +
+    labs(
+      x    = "0 = No, 1 = Yes",
+      y    = "% within Diabetes Status",
+      fill = "Diabetes Status"
+    ) +
+    theme_minimal(base_size = 16) +
+    theme(
+      strip.text.x     = element_text(face = "bold", size = 16),
+      strip.background = element_blank(),
+      axis.text.x      = element_text(size = 14),
+      axis.text.y      = element_text(size = 14),
+      legend.position  = "bottom",
+      panel.spacing    = unit(1.5, "lines")
+    )
+```
+
+
+4. Feature Engineering / Screening
+```{r}
+# Correlation matrix of selected continuous variables
+corr_mat <- cor(diabetes_data %>% select(all_of(num_cols)))
+corrplot(corr_mat, method = "color", tl.cex = 0.8)
+```
+
+
+```{r}
+# Spearman correlation between predictors and target variable
+
+# Define your predictors
+feat_cols <- c("HighBP","HighChol","Smoker","Stroke","HeartDiseaseorAttack",
+               "PhysActivity","Fruits","Veggies","HvyAlcoholConsump",
+               "AnyHealthcare","NoDocbcCost","DiffWalk","Sex",
+               "BMI","GenHlth","MentHlth","PhysHlth","Age","Education","Income")
+
+# Compute, tidy, sort, and plot in one go
+sapply(diabetes_data[feat_cols], 
+       function(x) cor(x, diabetes_data$Diabetes_012, method="spearman")) %>%
+  enframe("Feature","Corr") %>%
+  arrange(Corr) %>%
+  ggplot(aes(Corr, reorder(Feature, Corr))) +
+    geom_col(fill="steelblue") +
+    labs(x="Spearman ρ", y=NULL, title="Feature–Target Spearman Correlations") +
+    theme_minimal(base_size=14)
+
+
+```
+
+
+```{r}
+# Compute NZV metrics
+
+nzv_metrics <- nearZeroVar(diabetes_data, saveMetrics = TRUE) %>%
+  tibble::rownames_to_column("Feature")
+
+# Scatter freqRatio vs percentUnique and highlight nzv
+ggplot(nzv_metrics, aes(x = freqRatio, y = percentUnique, label = Feature)) +
+  geom_point(aes(color = nzv), size = 3) +
+  geom_text(data = subset(nzv_metrics, nzv), 
+            vjust = -1, size = 3) +
+  scale_color_manual(values = c("black","red")) +
+  labs(
+    title = "Near‑Zero‑Variance Metrics",
+    subtitle = "Features flagged in red have near‑zero variance",
+    x = "Frequency Ratio",
+    y = "% Unique Values",
+    color = "NZV Flag"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+
+
+```{r}
+# Identify near-zero variance (NZV) predictors
+
+nzv_metrics <- nearZeroVar(diabetes_data, saveMetrics = TRUE) %>%
+  rownames_to_column("Feature")
+
+# Which ones are flagged?
+nzv_metrics %>% 
+  filter(nzv) %>% 
+  select(Feature, freqRatio, percentUnique)
+
+# In our case:
+drop_nzv <- c("CholCheck", "AnyHealthcare", "Stroke")
+
+# Pruned dataset
+df_nzv <- diabetes_data %>% select(-all_of(drop_nzv))
+
+```
+
+
+```{r}
+# Drop identified NZV variables from dataset
+
+drop_features <- c("CholCheck", "AnyHealthcare")
+
+# Create a pruned dataset
+diabetes_data_pruned <- diabetes_data %>%
+  select(-all_of(drop_features))
+
+# Confirm removal
+setdiff(drop_features, names(diabetes_data_pruned))
+#> character(0)  # means all were successfully dropped
+
+# Check remaining columns
+glimpse(diabetes_data_pruned)
+
+
+```
+
+5. Train-Test Split
+```{r}
+#Create Stratified split, to split by class to handle class imbalance
+
+set.seed(123)
+
+# Stratified 80/20 split to preserve class proportions
+train_idx <- createDataPartition(
+  diabetes_data_pruned$Diabetes_012,
+  p    = 0.8,
+  list = FALSE
+)
+
+# Subset into training and testing sets
+train <- diabetes_data_pruned[train_idx, ]
+test  <- diabetes_data_pruned[-train_idx, ]
+
+# ── save test labels for later evaluation ───
+split_test_labels <- test$Diabetes_012
+
+# Compare class distribution between training and test sets
+prop_train <- prop.table(table(train$Diabetes_012))
+prop_test  <- prop.table(table(test$Diabetes_012))
+
+# Print the proportions side by side
+data.frame(
+  Class       = names(prop_train),
+  Train_Pct   = round(100 * as.numeric(prop_train), 1),
+  Test_Pct    = round(100 * as.numeric(prop_test), 1)
+)
+
+```
+
+
+6. Handling Class Imbalance
+```{r}
+# handling class imbalance with the caret package by duplicating the two minority classes up to the majority class size
+
+set.seed(123)
+
+# Apply up-sampling so minority classes match the majority class size
+train_x <- train %>% select(-Diabetes_012)
+train_y <- factor(train$Diabetes_012, levels = c(0,1,2), labels = c("No","Pre","Yes"))
+
+upsampled <- upSample(x = train_x, y = train_y, yname = "Diabetes_012")
+
+# Balanced training dataset
+balanced_training_set <- upsampled
+
+
+# Quick class‐balance check
+round(prop.table(table(balanced_training_set$Diabetes_012)) * 100, 1)
+
+```
+
+
+```{r}
+# ---- Class distribution before and after resampling ----
+
+# Example counts (replace with your actual counts if needed)
+before_counts <- data.frame(
+  Class = c("No diabetes", "Prediabetes", "Diabetes"),
+  Percentage = c(83.4, 2.4, 14.2),
+  Dataset = "Before Resampling"
+)
+
+after_counts <- data.frame(
+  Class = c("No diabetes", "Prediabetes", "Diabetes"),
+  Percentage = c(33.3, 33.3, 33.3),
+  Dataset = "After Resampling"
+)
+
+# Combine into one dataset
+class_dist <- rbind(before_counts, after_counts)
+
+# Plot
+library(ggplot2)
+
+ggplot(class_dist, aes(x = Class, y = Percentage, fill = Dataset)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = paste0(Percentage, "%")),
+            position = position_dodge(width = 0.9),
+            vjust = -0.5, size = 3.5) +
+  scale_fill_manual(values = c("#1f77b4", "#ff7f0e")) +
+  labs(
+    title = "Comparison of Outcome Class Distribution",
+    subtitle = "Before vs After Resampling",
+    x = "Diabetes Status",
+    y = "Percentage"
+  ) +
+  theme_minimal(base_size = 13)
+
+```
+
+
+7. Model Training (Baseline Machine Learning Models)
+```{r cache=TRUE}
+# Train multinomial logistic regression
+set.seed(123)
+lr_model <- nnet::multinom(Diabetes_012 ~ ., data = balanced_training_set, trace = FALSE)
+
+# Predict on test
+lr_pred <- predict(lr_model, newdata = test)
+
+# Ensure test$Diabetes_012 is a factor with matching levels
+test$Diabetes_012 <- factor(
+  test$Diabetes_012,
+  levels = c(0, 1, 2),
+  labels = c("No", "Pre", "Yes")
+)
+
+
+# Evaluate
+lr_cm <- confusionMatrix(lr_pred, test$Diabetes_012)
+
+# Print with custom heading
+cat("Logistic Regression:\n\n")
+print(lr_cm)
+
+
+```
+
+
+```{r cache=TRUE}
+# Train Random Forest model using ranger
+set.seed(123)
+rf_model <- ranger(
+  formula        = Diabetes_012 ~ .,
+  data           = balanced_training_set,
+  num.trees      = 500,
+  classification = TRUE,
+  verbose        = TRUE
+)
+
+# Predict on the test set
+rf_preds <- predict(rf_model, data = test)$predictions
+
+# ensure they’re a factor with the same levels as the test outcome
+rf_preds <- factor(
+  rf_preds,
+  levels = levels(test$Diabetes_012)
+)
+
+
+# Compute and print the confusion matrix
+rf_cm <- confusionMatrix(rf_preds, test$Diabetes_012)
+
+# Print 
+cat("Random Forest:\n\n")
+print(rf_cm)
+
+```
+
+
+```{r xgb, cache=TRUE}
+#Train the Xgboost model
+
+# Ensure test labels have the same levels as training
+test$Diabetes_012 <- factor(test$Diabetes_012,
+                            levels = levels(balanced_training_set$Diabetes_012))
+
+# Build matrices and DMatrices from your existing split
+x_cols  <- setdiff(names(balanced_training_set), "Diabetes_012")
+train_x <- as.matrix(balanced_training_set[, x_cols])
+train_y <- as.numeric(balanced_training_set$Diabetes_012) - 1L  # 0,1,2
+
+test_x  <- as.matrix(test[, x_cols])
+test_yf <- test$Diabetes_012
+
+dtrain  <- xgb.DMatrix(data = train_x, label = train_y)
+dtest   <- xgb.DMatrix(data = test_x,  label = as.numeric(test_yf) - 1L)
+
+# Train XGBoost with 500 boosting rounds
+set.seed(123)
+xgb_model <- xgboost(
+  data        = dtrain,
+  objective   = "multi:softprob",
+  num_class   = 3,
+  eval_metric = "mlogloss",
+  nrounds     = 500,   
+  verbose     = 0
+)
+
+# Predict & evaluate
+pred_prob <- predict(xgb_model, dtest)
+pred_mat  <- matrix(pred_prob, ncol = 3, byrow = TRUE)
+pred_lab  <- factor(max.col(pred_mat) - 1L, levels = 0:2,
+                    labels = levels(test_yf))
+
+xgb_cm <- caret::confusionMatrix(pred_lab, test_yf)
+
+# Print 
+cat("XGBoost:\n\n")
+print(xgb_cm)
+
+```
+
+
+8. Deep Learning Models
+```{r tabnet-training, cache=TRUE}
+
+# Full TabNet training & evaluation on balanced data with class‐weights
+
+set.seed(123)
+
+# Prepare training frame (ensure factor target with labels No/Pre/Yes)
+df_full <- balanced_training_set
+df_full$Diabetes_012 <- factor(
+  as.integer(df_full$Diabetes_012) - 1L,
+  levels = 0:2,
+  labels = c("No","Pre","Yes")
+)
+
+# Class weights -> expand to per-sample weights
+freqs         <- table(df_full$Diabetes_012)
+inv_freqs     <- sum(freqs) / (length(freqs) * freqs)      # inverse frequency
+class_weights <- as.numeric(inv_freqs)                      # length = 3 (No, Pre, Yes)
+row_weights   <- class_weights[as.integer(df_full$Diabetes_012)]  # per-sample
+
+# Config: single place for valid split + early stopping
+full_config <- tabnet_config(
+  num_steps               = 3,
+  skip_importance         = TRUE,
+  learn_rate              = 0.02,
+  virtual_batch_size      = 4096,
+  num_independent         = 2,
+  num_shared              = 2,
+  valid_split             = 0.20,
+  early_stopping_monitor  = "valid_loss",
+  early_stopping_patience = 3
+)
+
+# TabNet with class weights 
+predictor_cols <- setdiff(names(df_full), "Diabetes_012")
+
+set.seed(123)
+tabnet_model <- tabnet_fit(
+  x           = df_full[, predictor_cols],
+  y           = df_full$Diabetes_012,
+  config      = full_config,
+  epochs      = 20,
+  batch_size  = 256,
+  num_workers = 0,
+  weights     = row_weights
+)
+
+# Prepare hold-out test set (match factor levels)
+true_factor <- factor(
+  as.integer(test$Diabetes_012) - 1L,
+  levels = 0:2,
+  labels = c("No","Pre","Yes")
+)
+test_x <- test[, predictor_cols, drop = FALSE]
+
+# Predict class labels on test set
+preds     <- predict(tabnet_model, test_x, type = "class")
+pred_class <- preds$.pred_class
+
+# Accuracy & confusion matrix
+acc <- mean(pred_class == true_factor)
+cat(sprintf("TabNet test accuracy: %.2f%%\n\n", 100 * acc))
+
+conf_mat_full <- confusionMatrix(pred_class, true_factor)
+print(conf_mat_full)
+
+```
+
+
+```{r lstm-training, cache=TRUE}
+
+#Train the LSTM model
+
+# --- Prep ---
+predictors <- setdiff(names(balanced_training_set), "Diabetes_012")
+
+X_train <- as.matrix(balanced_training_set[, predictors, drop = FALSE])
+X_test  <- as.matrix(test[, predictors, drop = FALSE])
+
+mu <- colMeans(X_train)
+sd <- apply(X_train, 2, sd); sd[sd == 0] <- 1
+X_train <- scale(X_train, center = mu, scale = sd)
+X_test  <- scale(X_test,  center = mu, scale = sd)
+
+X_train_seq <- array(X_train, dim = c(nrow(X_train), 1L, ncol(X_train)))
+X_test_seq  <- array(X_test,  dim = c(nrow(X_test),  1L, ncol(X_test)))
+
+train_yf <- factor(balanced_training_set$Diabetes_012, levels = c("No","Pre","Yes"))
+test_yf  <- factor(test$Diabetes_012,                     levels = c("No","Pre","Yes"))
+
+num_classes <- 3
+y_train <- keras::to_categorical(as.integer(train_yf) - 1L, num_classes = num_classes)
+y_test  <- keras::to_categorical(as.integer(test_yf)  - 1L, num_classes = num_classes)
+
+# Simple LSTM model
+lstm_model <- keras::keras_model_sequential() |>
+  keras::layer_lstm(32, input_shape = c(1L, dim(X_train_seq)[3])) |>
+  keras::layer_dropout(0.2) |>
+  keras::layer_dense(num_classes, activation = "softmax")
+
+lstm_model |>
+  keras::compile(
+    loss      = "categorical_crossentropy",
+    optimizer = keras::optimizer_adam(learning_rate = 1e-3),
+    metrics   = "accuracy"
+  )
+
+# Early stop (keeps best weights)
+es_cb <- keras::callback_early_stopping(
+  monitor              = "val_loss",
+  patience             = 3,
+  restore_best_weights = TRUE
+)
+
+# --- Train (uses 20% of train as validation) ---
+history <- lstm_model |>
+  keras::fit(
+    X_train_seq, y_train,
+    epochs           = 15,
+    batch_size       = 128,
+    validation_split = 0.2,
+    callbacks        = list(es_cb),
+    verbose          = 2
+  )
+
+# --- Evaluate on test set ---
+res <- keras::evaluate(lstm_model, X_test_seq, y_test, verbose = 0)
+cat(sprintf("LSTM test accuracy: %.3f\n", as.numeric(res["accuracy"])))
+
+# --- Predict on test set ---
+pred_probs <- predict(lstm_model, X_test_seq, verbose = 0)
+
+
+# Convert probabilities to class labels
+pred_labels <- factor(
+  apply(pred_probs, 1, which.max) - 1L,
+  levels = 0:2,
+  labels = levels(train_yf)
+)
+
+# Confusion matrix
+lstm_cm <- caret::confusionMatrix(pred_labels, test_yf)
+print(lstm_cm)
+
+```
+
+
+9. Evaluation
+```{r cache=TRUE}
+
+# Compute Accuracy, Balanced Accuracy, and Macro-F1 from confusion matrices
+metrics_from_cm <- function(cm) {
+  byc <- as.data.frame(cm$byClass)
+  bal_acc <- mean(byc[,"Balanced Accuracy"], na.rm = TRUE)
+  macro_f1 <- mean(byc[,"F1"], na.rm = TRUE)
+  c(
+    Accuracy          = unname(cm$overall["Accuracy"]),
+    Balanced_Accuracy = bal_acc,
+    Macro_F1          = macro_f1
+  )
+}
+
+# Build comparison tables of model performance
+results_initial <- data.frame(
+  Model = c("Random Forest", "XGBoost", "Logistic Regression", "TabNet", "LSTM"),
+  rbind(
+    metrics_from_cm(rf_cm),           # RF CM
+    metrics_from_cm(xgb_cm),          # XGB CM
+    metrics_from_cm(lr_cm),           # LR CM
+    metrics_from_cm(conf_mat_full),   # TabNet CM
+    metrics_from_cm(lstm_cm)          # LSTM CM
+  )
+)
+
+# Format as percentages with 1 decimal place
+results_initial_fmt <- results_initial %>%
+  mutate(
+    Accuracy          = sprintf("%.1f%%", Accuracy * 100),
+    Balanced_Accuracy = sprintf("%.1f%%", Balanced_Accuracy * 100),
+    Macro_F1          = sprintf("%.1f%%", Macro_F1 * 100)
+  )
+
+knitr::kable(
+  results_initial_fmt,
+  caption = "Model comparison — Accuracy, Balanced Accuracy, Macro-F1."
+)
+
+```
+
+
+```{r}
+# --- Grouped bar chart for the models ---
+
+results_long <- results_initial %>%
+  pivot_longer(
+    cols = c(Accuracy, Balanced_Accuracy, Macro_F1),
+    names_to = "Metric",
+    values_to = "Score"
+  )
+
+# Order models by Accuracy for clearer comparisons
+order_by_acc <- results_initial %>% arrange(desc(Accuracy)) %>% pull(Model)
+results_long$Model <- factor(results_long$Model, levels = order_by_acc)
+
+ggplot(results_long, aes(x = Model, y = Score, fill = Metric)) +
+  geom_col(position = position_dodge(width = 0.9)) +
+  geom_text(aes(label = sprintf("%.1f%%", Score * 100)),   # percentage labels
+            position = position_dodge(width = 0.9),
+            vjust = -0.25, size = 3.2) +
+  labs(
+    title = "Model Performance Comparison",
+    y = "Score (%)",
+    x = "Model"
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  scale_y_continuous(labels = scales::percent, limits = c(0,1)) +
+  coord_cartesian(ylim = c(0, 1)) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+```
+
+
+10. Hyperparameter Tuning
+```{r cache=TRUE}
+#Hyperparameter tuning for random forest with 500 trees
+
+
+# Take a sample of 5000 rows for tuning only
+set.seed(123)
+sample_idx <- sample(nrow(balanced_training_set), 5000)
+tune_sample <- balanced_training_set[sample_idx, ]
+
+# Split predictors/outcome
+train_x <- tune_sample %>% select(-Diabetes_012)
+train_y <- tune_sample$Diabetes_012
+
+# CV setup
+rf_ctrl <- trainControl(
+  method     = "cv",
+  number     = 3,     # lighter than 5- or 10-fold
+  classProbs = TRUE
+)
+
+# Grid
+rf_grid <- expand.grid(
+  mtry          = 5:10,
+  splitrule     = "extratrees",
+  min.node.size = 1
+)
+
+# Hyperparameter tuning for Random Fores
+set.seed(123)
+rf_tuned_subset <- train(
+  x         = train_x,
+  y         = train_y,
+  method    = "ranger",
+  tuneGrid  = rf_grid,
+  trControl = rf_ctrl,
+  num.trees = 200,     # lighter for tuning step
+  metric    = "Accuracy"
+)
+
+# 5) Results
+print(rf_tuned_subset)
+
+```
+
+
+
+```{r cache=TRUE}
+# === Rebuild the RF model with the best hyperparameters ===
+set.seed(123)
+
+# Ensure test outcome levels match training
+test$Diabetes_012 <- factor(test$Diabetes_012,
+                            levels = levels(balanced_training_set$Diabetes_012))
+
+# Tuned params from RF tuning
+rf_best <- as.list(rf_tuned_subset$bestTune)   # mtry, splitrule, min.node.size
+str(rf_best)
+
+
+# Final refit on FULL balanced training set
+set.seed(123)
+rf_final <- ranger::ranger(
+  Diabetes_012 ~ .,
+  data            = balanced_training_set,
+  num.trees       = 500,
+  mtry            = rf_best$mtry,
+  splitrule       = rf_best$splitrule,
+  min.node.size   = rf_best$min.node.size,
+  sample.fraction = 0.632,
+  probability     = TRUE,
+  importance      = "none",
+  num.threads     = 1,
+  verbose         = TRUE
+)
+
+
+# Evaluate on test set (use only predictors)
+feat_cols   <- setdiff(names(test), "Diabetes_012")
+rf_pred_obj <- predict(rf_final, data = test[, feat_cols, drop = FALSE])
+
+rf_prob <- as.data.frame(rf_pred_obj$predictions)
+rf_prob <- rf_prob[, levels(test$Diabetes_012), drop = FALSE]
+
+rf_pred <- factor(
+  colnames(rf_prob)[max.col(as.matrix(rf_prob), ties.method = "first")],
+  levels = levels(test$Diabetes_012)
+)
+
+rf_tuned_cm <- caret::confusionMatrix(rf_pred, test$Diabetes_012)
+
+# Print 
+cat("Random Forest (Tuned):\n\n")
+print(rf_tuned_cm)
+
+```
+
+
+```{r cache=TRUE}
+# Hyperparameter tuning for xgboost model
+
+# --- Tuning subset ---
+set.seed(123)
+tune_idx <- caret::createDataPartition(balanced_training_set$Diabetes_012, p = 0.15, list = FALSE)
+tune_x   <- balanced_training_set[tune_idx, ] |> dplyr::select(-Diabetes_012)
+tune_y   <- balanced_training_set$Diabetes_012[tune_idx]
+
+# --- 3-fold CV, random search (~30 configs) ---
+xgb_ctrl <- caret::trainControl(
+  method          = "cv",
+  number          = 3,
+  classProbs      = TRUE,
+  summaryFunction = multiClassSummary,
+  allowParallel   = TRUE,
+  search          = "random",
+  verboseIter     = FALSE
+)
+
+# Hyperparameter tuning for XGBoost 
+set.seed(123)
+xgb_tuned <- caret::train(
+  x              = tune_x,
+  y              = tune_y,
+  method         = "xgbTree",
+  trControl      = xgb_ctrl,
+  tuneLength     = 30,     # ~30 random configs
+  metric         = "Accuracy",
+  verbose        = FALSE,
+  nthread        = 2
+)
+
+# Inspect & save best params for refitting the model
+print(xgb_tuned$bestTune)
+
+
+```
+
+
+```{r}
+# === XGBoost: Final refit on FULL training set + evaluation ===
+set.seed(123)
+
+# Ensure test outcome factor levels match training
+test$Diabetes_012 <- factor(test$Diabetes_012, 
+                            levels = levels(balanced_training_set$Diabetes_012))
+
+# Take best params directly from tuning
+best <- xgb_tuned$bestTune
+
+# Final refit (same params, trained on full balanced set)
+xgb_final <- caret::train(
+  Diabetes_012 ~ .,
+  data         = balanced_training_set,
+  method       = "xgbTree",
+  trControl    = caret::trainControl(method = "none", classProbs = TRUE),
+  tuneGrid     = best,
+  metric       = "Accuracy",
+  verbose      = FALSE,
+  nthread      = 2
+)
+
+# Evaluate on test set
+xgb_final_pred <- predict(xgb_final, newdata = test)
+xgb_final_cm   <- caret::confusionMatrix(xgb_final_pred, test$Diabetes_012)
+
+cat("XGBoost (Tuned):\n\n")
+print(xgb_final_cm)
+
+# Probabilities for hybrid/stacking
+xgb_prob <- predict(xgb_final, newdata = test, type = "prob")
+xgb_prob <- xgb_prob[, levels(test$Diabetes_012), drop = FALSE]
+
+best <- xgb_tuned$bestTune
+best$nrounds <- best$nrounds 
+
+```
+
+
+```{r}
+# === Hybrid RF(tuned) + Xgboost(tuned) ===
+set.seed(123)
+
+want_levels  <- c("No","Pre","Yes")
+feature_cols <- setdiff(names(balanced_training_set), "Diabetes_012")
+
+# Probabilities
+rf_prob  <- predict(rf_final, data = test[, feature_cols])$predictions
+rf_prob  <- as.data.frame(rf_prob)[, want_levels, drop = FALSE]
+xgb_prob <- predict(xgb_final, newdata = test[, feature_cols], type = "prob")
+xgb_prob <- xgb_prob[, want_levels, drop = FALSE]
+
+# Combine RF + XGBoost predictions (hybrid ensemble)
+hybrid_prob <- rf_prob
+
+# Only override to XGB's "Yes" when XGB is clearly more confident
+delta <- 0.10   # margin (tune on validation if desired)
+thr   <- 0.60   # absolute confidence threshold
+
+use_xgb_yes <- (xgb_prob$Yes - rf_prob$Yes >= delta) & (xgb_prob$Yes >= thr)
+hybrid_prob$Yes[use_xgb_yes] <- xgb_prob$Yes[use_xgb_yes]
+
+# keep sums ≤ 1 by re-normalising rows (safe and simple)
+hybrid_prob <- hybrid_prob / pmax(rowSums(hybrid_prob), 1e-12)
+
+# Labels and evaluation
+hybrid_pred <- factor(colnames(hybrid_prob)[max.col(as.matrix(hybrid_prob), "first")],
+                      levels = want_levels)
+hybrid_cm <- caret::confusionMatrix(hybrid_pred, test$Diabetes_012)
+
+cat("Hybrid Model (RF + XGBoost):\n\n")
+print(hybrid_cm)
+```
+
+
+```{r cache=TRUE}
+
+# Compute Accuracy, Balanced Accuracy, and Macro-F1 from confusion matrices
+
+# Helper to extract metrics
+metrics_from_cm <- function(cm) {
+  byc <- as.data.frame(cm$byClass)
+  bal_acc <- mean(byc[, "Balanced Accuracy"], na.rm = TRUE)
+  macro_f1 <- mean(byc[, "F1"], na.rm = TRUE)
+  c(
+    Accuracy         = unname(cm$overall["Accuracy"]),
+    BalancedAccuracy = bal_acc,
+    MacroF1          = macro_f1
+  )
+}
+
+# Build results table (replace objects with your CM names)
+results <- data.frame(
+  Model = c("Logistic Regression", "Random Forest (tuned)", "XGBoost (tuned)",
+            "TabNet", "LSTM", "Hybrid (RF+XGB)"),
+  rbind(
+    metrics_from_cm(lr_cm),
+    metrics_from_cm(rf_tuned_cm),
+    metrics_from_cm(xgb_final_cm),
+    metrics_from_cm(conf_mat_full),
+    metrics_from_cm(lstm_cm),
+    metrics_from_cm(hybrid_cm)
+  )
+)
+
+# Table (sorted by Accuracy, formatted as %)
+results_sorted <- results %>% dplyr::arrange(dplyr::desc(Accuracy))
+
+results_print <- results_sorted %>%
+  dplyr::mutate(
+    Accuracy         = sprintf("%.1f%%", Accuracy * 100),
+    BalancedAccuracy = sprintf("%.1f%%", BalancedAccuracy * 100),
+    MacroF1          = sprintf("%.1f%%", MacroF1 * 100)
+  )
+
+knitr::kable(
+  results_print,
+  caption = "Model comparison — Accuracy, Balanced Accuracy, Macro-F1 (sorted by Accuracy)."
+)
+
+
+```
+
+
+```{r cache=TRUE}
+
+# --- Grouped bar chart for tuned + hybrid models ---
+
+results_long <- results_sorted %>%
+  tidyr::pivot_longer(
+    cols = c(Accuracy, BalancedAccuracy, MacroF1),
+    names_to = "Metric",
+    values_to = "Score"
+  ) %>%
+  dplyr::mutate(Model = factor(Model, levels = results_sorted$Model))
+
+ggplot(results_long, aes(x = Model, y = Score, fill = Metric)) +
+  geom_col(position = position_dodge(width = 0.9)) +
+  geom_text(aes(label = sprintf("%.1f%%", Score * 100)),
+            position = position_dodge(width = 0.9),
+            vjust = -0.25, size = 3.2) +
+  labs(
+    title = "Model Performance Comparison (sorted by Accuracy)",
+    y = "Score (%)",
+    x = "Model"
+  ) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+```
+
+
+13. Save the best model (RF tuned)
+```{r}
+# Save tuned Random Forest model + evaluation objects
+saveRDS(list(best_tune = rf_best, num.trees = 500, sample.fraction = 0.632),
+        "rf_final_meta.rds")
+saveRDS(rf_final,    "rf_final.rds")
+saveRDS(rf_tuned_cm, "rf_final_confmat.rds")
+saveRDS(rf_prob,     "rf_final_test_prob.rds")
+
+```
+
+
